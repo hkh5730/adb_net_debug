@@ -1,0 +1,253 @@
+From 74b0595c9de4836a36cafa1c4127357e6046c9c1 Mon Sep 17 00:00:00 2001
+From: KongHui Huang <hkh5730@gmail.com>
+Date: Mon, 12 Feb 2018 11:21:15 +0800
+Subject: [PATCH] add ADB over network debug to developer options
+
+---
+ device/rockchip/common/init.rk30board.rc           | 11 ++++
+ .../Settings/res/values-zh-rCN/custom_strings.xml  | 10 ++++
+ .../apps/Settings/res/values/custom_strings.xml    |  9 +++
+ .../apps/Settings/res/xml/development_prefs.xml    |  6 ++
+ .../com/android/settings/DevelopmentSettings.java  | 70 +++++++++++++++++++++-
+ 5 files changed, 105 insertions(+), 1 deletion(-)
+ create mode 100644 packages/apps/Settings/res/values-zh-rCN/custom_strings.xml
+ create mode 100644 packages/apps/Settings/res/values/custom_strings.xml
+
+diff --git a/device/rockchip/common/init.rk30board.rc b/device/rockchip/common/init.rk30board.rc
+index b190c89..940f560 100644
+--- a/device/rockchip/common/init.rk30board.rc
++++ b/device/rockchip/common/init.rk30board.rc
+@@ -247,6 +247,17 @@ service shutdownanim /system/bin/bootanimation shutdown
+     disabled
+     oneshot
+ 
++# for Internet adb
++on property:persist.internet.adb.enable=1
++    setprop service.adb.tcp.port 5555
++    restart adbd
++
++# for Internet adb
++on property:persist.internet.adb.enable=0
++    setprop service.adb.tcp.port -1
++    restart adbd
++
++
+ service su_daemon /system/xbin/su --daemon
+     seclabel u:r:sudaemon:s0
+     oneshot
+diff --git a/packages/apps/Settings/res/values-zh-rCN/custom_strings.xml b/packages/apps/Settings/res/values-zh-rCN/custom_strings.xml
+new file mode 100644
+index 0000000..f71dd0c
+--- /dev/null
++++ b/packages/apps/Settings/res/values-zh-rCN/custom_strings.xml
+@@ -0,0 +1,10 @@
++<?xml version="1.0" encoding="utf-8"?>
++
++<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
++  <!-- Android debugging over Network -->
++  <string name="adb_over_network">网络 ADB 调试</string>
++  <string name="adb_over_network_summary">启用通过网络接口（Wi\u2011Fi、有线网络、USB 网络 ）的 TCP/IP 调试。</string>
++  <!-- Warning for Adb over Network -->
++  <string name="adb_over_network_warning">警告：当网络 ADB 调试启用时，您的设备将在所有已连接的网络上接收指令！\n\n请只在您信任的网络中启用此功能。\n\n您真的要开启这个功能吗？</string>
++
++</resources>
+diff --git a/packages/apps/Settings/res/values/custom_strings.xml b/packages/apps/Settings/res/values/custom_strings.xml
+new file mode 100644
+index 0000000..f1751b0
+--- /dev/null
++++ b/packages/apps/Settings/res/values/custom_strings.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++ 
++<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
++        <!-- Android debugging over networl -->
++    <string name="adb_over_network">ADB over network</string>
++    <string name="adb_over_network_summary">Enable TCP/IP debugging over network interfaces (Wi\u2011Fi, Ethernet, USB networks). </string>
++    <!-- Warning for Adb over Network -->
++    <string name="adb_over_network_warning">WARNING: When ADB over network is enabled, your phone is open for intrusions on all connected networks!\n\nOnly use this feature when you are connected on trusted networks.\n\nDo you really want to enable this function?</string>
++</resources>
+diff --git a/packages/apps/Settings/res/xml/development_prefs.xml b/packages/apps/Settings/res/xml/development_prefs.xml
+index c74d335..7c6dc2e 100644
+--- a/packages/apps/Settings/res/xml/development_prefs.xml
++++ b/packages/apps/Settings/res/xml/development_prefs.xml
+@@ -78,6 +78,12 @@
+                 android:title="@string/clear_adb_keys" />
+ 
+         <SwitchPreference
++            android:key="adb_over_network"
++            android:title="@string/adb_over_network"
++            android:summary="@string/adb_over_network_summary"
++            android:dependency="enable_adb"/>
++
++        <SwitchPreference
+             android:key="enable_terminal"
+             android:title="@string/enable_terminal_title"
+             android:summary="@string/enable_terminal_summary" />
+diff --git a/packages/apps/Settings/src/com/android/settings/DevelopmentSettings.java b/packages/apps/Settings/src/com/android/settings/DevelopmentSettings.java
+index b267195..dbeafb9 100644
+--- a/packages/apps/Settings/src/com/android/settings/DevelopmentSettings.java
++++ b/packages/apps/Settings/src/com/android/settings/DevelopmentSettings.java
+@@ -83,6 +83,10 @@ import java.util.Arrays;
+ import java.util.HashSet;
+ import java.util.List;
+ 
++import android.net.NetworkUtils;
++import com.android.settings.Utils;
++import android.net.ConnectivityManager;
++
+ /*
+  * Displays preferences for application developers.
+  */
+@@ -102,6 +106,7 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+     public static final String PREF_SHOW = "show";
+ 
+     private static final String ENABLE_ADB = "enable_adb";
++    private static final String ADB_TCPIP = "adb_over_network";
+     private static final String CLEAR_ADB_KEYS = "clear_adb_keys";
+     private static final String ENABLE_TERMINAL = "enable_terminal";
+     private static final String KEEP_SCREEN_ON = "keep_screen_on";
+@@ -189,6 +194,7 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+     private DevicePolicyManager mDpm;
+     private UserManager mUm;
+     private WifiManager mWifiManager;
++    private ConnectivityManager mConnectivityManager;
+ 
+     private SwitchBar mSwitchBar;
+     private boolean mLastEnabledState;
+@@ -196,6 +202,7 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+     private boolean mDontPokeProperties;
+ 
+     private SwitchPreference mEnableAdb;
++    private SwitchPreference mAdbOverNetwork;
+     private Preference mClearAdbKeys;
+     private SwitchPreference mEnableTerminal;
+     private Preference mBugreport;
+@@ -266,6 +273,7 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+     private boolean mDialogClicked;
+     private Dialog mEnableDialog;
+     private Dialog mAdbDialog;
++    private Dialog mAdbTcpDialog;
+ 
+     private Dialog mAdbKeysDialog;
+     private boolean mUnavailable;
+@@ -286,6 +294,7 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+         mUm = (UserManager) getSystemService(Context.USER_SERVICE);
+ 
+         mWifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
++        mConnectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+ 
+         if (android.os.Process.myUserHandle().getIdentifier() != UserHandle.USER_OWNER
+                 || mUm.hasUserRestriction(UserManager.DISALLOW_DEBUGGING_FEATURES)
+@@ -303,6 +312,7 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+         final PreferenceGroup debugDebuggingCategory = (PreferenceGroup)
+                 findPreference(DEBUG_DEBUGGING_CATEGORY_KEY);
+         mEnableAdb = findAndInitSwitchPref(ENABLE_ADB);
++        mAdbOverNetwork = findAndInitSwitchPref(ADB_TCPIP);
+         mClearAdbKeys = findPreference(CLEAR_ADB_KEYS);
+         if (!SystemProperties.getBoolean("ro.adb.secure", false)) {
+             if (debugDebuggingCategory != null) {
+@@ -573,6 +583,9 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+         mHaveDebugSettings = false;
+         updateSwitchPreference(mEnableAdb, Settings.Global.getInt(cr,
+                 Settings.Global.ADB_ENABLED, 0) != 0);
++
++        updateAdbOverNetwork();
++        
+         if (mEnableTerminal != null) {
+             updateSwitchPreference(mEnableTerminal,
+                     context.getPackageManager().getApplicationEnabledSetting(TERMINAL_APP_PACKAGE)
+@@ -630,6 +643,30 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+         updateUSBAudioOptions();
+     }
+ 
++    private void updateAdbOverNetwork() {
++        // int port = 5555;
++        // int port = CMSettings.Secure.getInt(getActivity().getContentResolver(),
++        //         CMSettings.Secure.ADB_PORT, 0);
++        boolean enabled = (SystemProperties.getInt("persist.internet.adb.enable", 0) == 1);
++        
++         int port  = SystemProperties.getInt("service.adb.tcp.port", 0) ;
++
++        updateSwitchPreference(mAdbOverNetwork, enabled);
++
++
++         String ipAddress = null;
++            /*
++        if (enabled) {
++            ipAddress = Utils.getDefaultIpV4Addresses(mConnectivityManager);
++        }*/
++
++        if (ipAddress != null) {
++            mAdbOverNetwork.setSummary(ipAddress + ":" + String.valueOf(port));
++        } else {
++            mAdbOverNetwork.setSummary(R.string.adb_over_network_summary);
++        }
++    }
++
+     private void resetDangerousOptions() {
+         mDontPokeProperties = true;
+         for (int i=0; i< mResetSwitchPrefs.size(); i++) {
+@@ -1611,7 +1648,25 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+                 mVerifyAppsOverUsb.setChecked(false);
+                 updateBugreportOptions();
+             }
+-        } else if (preference == mClearAdbKeys) {
++        } else if (preference == mAdbOverNetwork) {
++           if (mAdbOverNetwork.isChecked()) {
++                if (mAdbTcpDialog != null) {
++                    dismissDialogs();
++                }
++                mAdbTcpDialog = new AlertDialog.Builder(getActivity()).setMessage(
++                        getResources().getString(R.string.adb_over_network_warning))
++                        .setTitle(R.string.adb_over_network)
++                        .setPositiveButton(android.R.string.yes, this)
++                        .setNegativeButton(android.R.string.no, this)
++                        .show();
++                mAdbTcpDialog.setOnDismissListener(this);
++            } else {
++                SystemProperties.set("persist.internet.adb.enable", Integer.toString(0));
++                // CMSettings.Secure.putInt(getActivity().getContentResolver(),
++                //         CMSettings.Secure.ADB_PORT, -1);
++                updateAdbOverNetwork();
++            }
++        }  else if (preference == mClearAdbKeys) {
+             if (mAdbKeysDialog != null) dismissDialogs();
+             mAdbKeysDialog = new AlertDialog.Builder(getActivity())
+                         .setMessage(R.string.adb_keys_warning_message)
+@@ -1779,6 +1834,10 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+             mAdbDialog.dismiss();
+             mAdbDialog = null;
+         }
++        if (mAdbTcpDialog != null) {
++            mAdbTcpDialog.dismiss();
++            mAdbTcpDialog = null;
++        }
+         if (mAdbKeysDialog != null) {
+             mAdbKeysDialog.dismiss();
+             mAdbKeysDialog = null;
+@@ -1802,6 +1861,12 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+                 // Reset the toggle
+                 mEnableAdb.setChecked(false);
+             }
++        }  else if (dialog == mAdbTcpDialog) {
++            if (which == DialogInterface.BUTTON_POSITIVE) {
++                // CMSettings.Secure.putInt(getActivity().getContentResolver(),
++                //         CMSettings.Secure.ADB_PORT, 5555);
++               SystemProperties.set("persist.internet.adb.enable", Integer.toString(1));
++            }
+         } else if (dialog == mAdbKeysDialog) {
+             if (which == DialogInterface.BUTTON_POSITIVE) {
+                 try {
+@@ -1833,6 +1898,9 @@ public class DevelopmentSettings extends SettingsPreferenceFragment
+                 mEnableAdb.setChecked(false);
+             }
+             mAdbDialog = null;
++        }  else if (dialog == mAdbTcpDialog) {
++            updateAdbOverNetwork();
++            mAdbTcpDialog = null;
+         } else if (dialog == mEnableDialog) {
+             if (!mDialogClicked) {
+                 mSwitchBar.setChecked(false);
+-- 
+1.9.1
+
